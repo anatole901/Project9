@@ -8,11 +8,18 @@ Created on Mon Nov 28 17:22:20 2022
 #librairies
 import pandas as pd
 import re
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn import metrics
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix
 
 #import the data
-data = pd.read_csv(r"C:\Users\anato\Documents\IRONHACK\IronFrandre\Project 9 Chess games of woman grandmasters\games_wgm.csv")
-
-data.isna().sum()
+data = pd.read_csv(r"C:\Users\anato\Documents\IRONHACK\games_wgm.csv")
 
 openings = pd.read_csv(r"C:\Users\anato\Documents\IRONHACK\IronFrandre\Project 9 Chess games of woman grandmasters\openings.csv")
 
@@ -101,8 +108,8 @@ def num_moves(s) :
     
 data['num_moves'] = data['full_game'].apply(num_moves)
 
-#Dropping problematic games and games finished on turn 1
-short_game = data.loc[data['num_moves'] == 1]
+#Dropping short and problematic games
+short_game = data.loc[data['num_moves'] < 6]
 
 data.drop(index = short_game.index, inplace = True)
 
@@ -695,10 +702,10 @@ def iter_moves(pos, moves) :
         try :
             test = b_move(w_move(pos, moves[0]), moves[1])
         except :
-            print(moves[0], moves[1])
+            #print(moves[0], moves[1])
             return ''
         if test == '' :
-            print(moves[0], moves[1])
+            #print(moves[0], moves[1])
             return ''
         else :
             return iter_moves(test, moves[2:])
@@ -713,9 +720,129 @@ data.at[0, 'full_game']
 move_list_from_string(data.at[0, 'full_game'])
 iter_moves(initial_pos, move_list_from_string(data.at[0, 'full_game']))
 
-final_pos = data['full_game'].apply(lambda s : iter_moves(initial_pos, move_list_from_string(s)))
-
-(final_pos == '').sum()
-prob = data.loc[final_pos == '']
+data['final_pos'] = data['full_game'].apply(lambda s : iter_moves(initial_pos, move_list_from_string(s)))
+(data['final_pos'] == '').sum()
+prob = data.loc[data['final_pos'] == '']
 iter_moves(initial_pos, move_list_from_string(data.at[32, 'full_game']))
 data.at[32, 'full_game']
+data.loc[data['num_moves'] < 11].shape
+
+data.drop(axis = 1, columns = ['game_id', 'game_url', 'pgn', 'rules'], inplace = True)
+data['time_class'].value_counts()
+
+def score(piece) :
+    dict = {'p' : 1, 'K' : 0, 'Q' : 9, 'B' : 3, 'N' : 3, 'R' : 5}
+    return dict[piece]
+
+
+def material(color, pos) :
+    sc = 0
+    for i in range(len(pos)//4) :
+        if pos[4*i] == color :
+            sc += score(pos[4 * i + 1])
+    return sc
+
+data['final_material'] = data['final_pos'].apply(lambda s : min([material('w', s), material('b', s)]))
+data['final_balance'] = data['final_pos'].apply(lambda s : material('w', s) - material('b', s))
+
+draws = data.loc[(data['white_points'] == 0.5) & (abs(data['final_balance']) > 1)]
+data.loc[(data['white_points'] == 0.5)].shape[0]
+bad_beats = data.loc[((data['white_points'] == 1) & (data['final_balance'] < -1)) | ((data['white_points'] == 0) & (data['final_balance'] > 1))]
+
+data.to_csv(r'C:\Users\anato\Documents\IRONHACK\chess_cleaned.csv')
+sample = data.sample(n = 30000, axis = 0, random_state = 17)
+sample.to_csv(r'C:\Users\anato\Documents\IRONHACK\IronFrandre\Project 9 Chess games of woman grandmasters\samplechess.csv')
+
+#Choosing the features.
+x = data[['black_rating', 'num_moves']]
+x['difference_of_rating'] = data['white_rating'] - data['black_rating']
+x['bullet'] = data['time_class'].apply(lambda s : 1 if s == 'bullet' else 0)
+x['rapid'] = data['time_class'].apply(lambda s : 1 if s == 'rapid' else 0)
+x['blitz'] = data['time_class'].apply(lambda s : 1 if s == 'blitz' else 0)
+x['daily'] = data['time_class'].apply(lambda s : 1 if s == 'daily' else 0)
+x['wgm_is_white'] = (data['wgm_username'] == data['white_username'].apply(lambda s : s.lower())).apply(lambda b : 1 if b else 0)
+y = 2 * data['white_points']
+
+x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=5)
+
+#Implementing the machine learning
+#First, decision tree classifier.
+dtc = DecisionTreeClassifier(max_depth = 5, random_state = 1)
+dtc.fit(x_train, y_train)
+y_DT = dtc.predict(x_test)
+print(classification_report(y_test, y_DT), sep = "\n")
+print(confusion_matrix(y_test, y_DT))
+
+plt.figure(figsize = (20,15))
+fn = ["black_rating", "num_moves", "difference_of_rating", "bullet", "rapid", "blitz", "daily", "wgm_is_white"]
+cn = ['black_wins', 'draw', 'white_wins']
+plot_tree(dtc, feature_names = fn, class_names = cn, filled = True);
+
+#Random forest classifier.
+rfc = RandomForestClassifier(max_depth = 7, random_state = 1)
+rfc.fit(x_train, y_train)
+y_RF = rfc.predict(x_test)
+print(classification_report(y_test, y_RF), sep = "\n")
+print(confusion_matrix(y_test, y_RF))
+
+#K nearest neighbours classifier.
+knn = KNeighborsClassifier(n_neighbors=40)
+knn.fit(x_train, y_train)
+y_KN = knn.predict(x_test)
+print(classification_report(y_test, y_KN), sep = "\n")
+print(confusion_matrix(y_test, y_KN))
+
+#Figures
+pie1 = [data.loc[data['white_points'] == 1].shape[0], data.loc[data['white_points'] == 0].shape[0], data.loc[data['white_points'] == 0.5].shape[0]]
+labels1 = ['White', 'Black', 'Draw']
+
+fig1 = plt.figure(figsize = (15, 8))
+plt.title("Proportion of wins")
+plt.pie(pie1, labels = labels1, autopct='%1.1f%%')
+plt.show()
+
+data['difference_bins'] = (data['white_rating'] - data['black_rating']).apply(lambda x : round(x/100, 0) * 100)
+def regroup(x) :
+    if x < -500 :
+        return -500
+    elif x > 500 :
+        return 500
+    else :
+        return x
+data['difference_bins'] = data['difference_bins'].apply(regroup)
+df2 = data[['full_game', 'white_points', 'difference_bins']].groupby(by = ['difference_bins', 'white_points'], as_index = False).agg('count')
+fig2 = plt.figure(figsize = (15, 8))
+sns.barplot(data = df2, x = 'difference_bins', y = 'full_game', hue = 'white_points')
+plt.xlabel('Rating of white minus rating of black')
+plt.ylabel('Number of games')
+plt.show()
+
+pie3 = [draws.shape[0], bad_beats.shape[0], data.shape[0] - draws.shape[0] - bad_beats.shape[0]]
+label3 = ['Draws with large material unbalance', 'Wins with material disadvantage', 'Other']
+fig3 = plt.figure(figsize = (15, 8))
+plt.title("Surprising results relative to material balance")
+plt.pie(pie3, labels = label3, autopct='%1.1f%%')
+plt.show()
+
+fig4 = plt.figure(figsize = (15, 8))
+sns.violinplot(x = (data['white_rating'] - data['black_rating']).apply(regroup))
+plt.title('Repartition of the difference between the ratings of the white and the black player')
+plt.show()
+
+fig5 = plt.figure()
+sns.violinplot(x = data.loc[data['white_points'] == 1, 'final_balance'])
+plt.title('Violin plot of the final material balance in games won by white')
+plt.show()
+
+fig6 = plt.figure()
+sns.violinplot(x = data.loc[data['white_points'] == 0, 'final_balance'])
+plt.title('Violin plot of the final material balance in games won by black')
+plt.show()
+
+fig7 = plt.figure()
+sns.violinplot(x = data.loc[data['white_points'] == 0.5, 'final_balance'])
+plt.title('Violin plot of the final material balance in games ended as a draw')
+plt.show()
+
+df = pd.read_csv(r"C:\Users\anato\Documents\IRONHACK\games_wgm.csv")
+df.at[0, 'pgn']
